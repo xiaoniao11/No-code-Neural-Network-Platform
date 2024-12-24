@@ -1,7 +1,7 @@
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
-                            QLabel, QGroupBox, QFormLayout, QSpinBox, QComboBox,
-                            QProgressBar, QCheckBox, QDoubleSpinBox, QMessageBox,
-                            QFileDialog, QDialog, QListWidget, QListWidgetItem)
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+                             QLabel, QGroupBox, QFormLayout, QSpinBox, QComboBox,
+                             QProgressBar, QCheckBox, QDoubleSpinBox, QMessageBox,
+                             QFileDialog, QDialog, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -215,7 +215,29 @@ class TrainingPage(QWidget):
         data_layout.addWidget(self.load_data_btn)
         data_layout.addWidget(self.data_info_label)
         data_group.setLayout(data_layout)
+
+        # 特征选择组
+        feature_group = QGroupBox("特征选择")
+        feature_layout = QVBoxLayout()
         
+        # 添加说明标签
+        feature_label = QLabel("请选择用于训练的特征（最后一个选中的特征将作为标签）")
+        feature_layout.addWidget(feature_label)
+        
+        self.feature_table = QTableWidget()
+        self.feature_table.setColumnCount(2)
+        self.feature_table.setHorizontalHeaderLabels(["选择", "特征名"])
+        self.feature_table.horizontalHeader().setStretchLastSection(True)
+        
+        # 添加确认选择按钮
+        self.confirm_features_btn = QPushButton("确认特征选择")
+        self.confirm_features_btn.clicked.connect(self.confirm_feature_selection)
+        self.confirm_features_btn.setEnabled(False)  # 初始状态禁用
+        
+        feature_layout.addWidget(self.feature_table)
+        feature_layout.addWidget(self.confirm_features_btn)
+        feature_group.setLayout(feature_layout)
+
         # 超参数设置组
         hyperparams_group = QGroupBox("超参数设置")
         hyperparams_layout = QFormLayout()
@@ -282,13 +304,9 @@ class TrainingPage(QWidget):
         
         control_group.setLayout(control_layout)
         
-        # 添加保存模型按钮
-        self.save_model_btn = QPushButton("保存模型")
-        self.save_model_btn.clicked.connect(self.save_model)
-        model_layout.addWidget(self.save_model_btn)  # 将按钮添加到模型加载组
-        
         left_panel.addWidget(model_group)  # 添加到左侧面板最上方
         left_panel.addWidget(data_group)
+        left_panel.addWidget(feature_group)  # 添加特征选择组
         left_panel.addWidget(hyperparams_group)
         left_panel.addWidget(training_group)
         left_panel.addWidget(control_group)
@@ -352,9 +370,9 @@ class TrainingPage(QWidget):
             for i, layer in enumerate(self.model.layers):
                 info += f"Layer {i+1}: {layer.type} - {layer.params}\n"
             QMessageBox.information(self, "模型信息", info)
-    
+
     def load_training_data(self):
-        """加载训���数据"""
+        """加载训练数据"""
         try:
             file_path, _ = QFileDialog.getOpenFileName(
                 self, "选择训练数据", "", "CSV Files (*.csv);;Excel Files (*.xlsx *.xls)"
@@ -365,64 +383,116 @@ class TrainingPage(QWidget):
                     df = pd.read_csv(file_path)
                 else:
                     df = pd.read_excel(file_path)
+
+                # 更新特征选择表格
+                self.feature_table.setRowCount(len(df.columns))
+                for i, column in enumerate(df.columns):
+                    # 创建复选框
+                    checkbox = QCheckBox()
+                    checkbox.setChecked(False)  # 默认不选中
+                    self.feature_table.setCellWidget(i, 0, checkbox)
+                    
+                    # 设置特征名
+                    self.feature_table.setItem(i, 1, QTableWidgetItem(column))
                 
-                # 假设最后一列是标签
-                X = df.iloc[:, :-1].values
-                y = df.iloc[:, -1].values
+                self.feature_table.resizeColumnsToContents()
                 
-                # 划分训练集和验证集
-                from sklearn.model_selection import train_test_split
-                X_train, X_val, y_train, y_val = train_test_split(
-                    X, y, test_size=0.2, random_state=42
-                )
+                # 保存原始数据
+                self.original_data = df
+                self.selected_features = None  # 清空已选特征
                 
-                # 创建数据加载器
-                from torch.utils.data import TensorDataset, DataLoader
-                train_dataset = TensorDataset(
-                    torch.FloatTensor(X_train),
-                    torch.LongTensor(y_train)
-                )
-                val_dataset = TensorDataset(
-                    torch.FloatTensor(X_val),
-                    torch.LongTensor(y_val)
-                )
-                
-                self.data = {
-                    "train_loader": DataLoader(
-                        train_dataset,
-                        batch_size=self.batch_size_spin.value(),
-                        shuffle=True
-                    ),
-                    "val_loader": DataLoader(
-                        val_dataset,
-                        batch_size=self.batch_size_spin.value(),
-                        shuffle=False
-                    )
-                }
+                # 启用确认按钮
+                self.confirm_features_btn.setEnabled(True)
+                # 禁用开始训练按钮，直到确认特征选择
+                self.start_btn.setEnabled(False)
                 
                 # 更新数据信息
                 self.data_info_label.setText(
                     f"已加载数据:\n"
-                    f"训练集: {len(X_train)} 样本\n"
-                    f"验证集: {len(X_val)} 样本\n"
-                    f"特征数: {X.shape[1]}"
+                    f"总样本数: {len(df)} \n"
+                    f"特征数: {len(df.columns)}\n"
+                    f"请选择要使用的特征"
                 )
-                
-                QMessageBox.information(self, "成功", "数据加载成功！")
-                
+
+                QMessageBox.information(self, "成功", "数据加载成功！请选择要用于训练的特征，并点击确认按钮。")
+
         except Exception as e:
             QMessageBox.critical(self, "错误", f"加载数据失败: {str(e)}")
-    
+
+    def confirm_feature_selection(self):
+        """确认特征选择"""
+        selected_features = self.get_selected_features()
+        if len(selected_features) < 2:
+            QMessageBox.warning(self, "警告", "请至少选择一个特征和一个标签（最后一个选中的特征将作为标签）！")
+            return
+        
+        self.selected_features = selected_features
+        # 更新数据信息
+        self.data_info_label.setText(
+            f"已加载数据:\n"
+            f"总样本数: {len(self.original_data)} \n"
+            f"已选特征数: {len(selected_features)-1}\n"
+            f"标签: {selected_features[-1]}"
+        )
+        
+        # 启用开始训练按钮
+        self.start_btn.setEnabled(True)
+        QMessageBox.information(self, "成功", f"已确认选择{len(selected_features)-1}个特征和1个标签！")
+
+    def get_selected_features(self):
+        """获取选中的特征列"""
+        selected_features = []
+        for i in range(self.feature_table.rowCount()):
+            checkbox = self.feature_table.cellWidget(i, 0)
+            if checkbox and checkbox.isChecked():
+                feature_name = self.feature_table.item(i, 1).text()
+                selected_features.append(feature_name)
+        return selected_features
+
     def start_training(self):
         """开始训练"""
         if self.model is None:
             QMessageBox.warning(self, "警告", "请先在模型搭建页面创建模型！")
             return
         
-        if self.data is None:
-            QMessageBox.warning(self, "警告", "请先加载训练数据！")
+        if not hasattr(self, 'original_data') or not hasattr(self, 'selected_features') or not self.selected_features:
+            QMessageBox.warning(self, "警告", "请先加载数据并确认特征选择！")
             return
-        
+
+        # 准备训练数据
+        X = self.original_data[self.selected_features[:-1]].values  # 特征
+        y = self.original_data[self.selected_features[-1]].values   # 标签
+
+        # 划分训练集和验证集
+        from sklearn.model_selection import train_test_split
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
+
+        # 创建数据加载器
+        from torch.utils.data import TensorDataset, DataLoader
+        train_dataset = TensorDataset(
+            torch.FloatTensor(X_train),
+            torch.LongTensor(y_train)
+        )
+        val_dataset = TensorDataset(
+            torch.FloatTensor(X_val),
+            torch.LongTensor(y_val)
+        )
+
+        self.data = {
+            "train_loader": DataLoader(
+                train_dataset,
+                batch_size=self.batch_size_spin.value(),
+                shuffle=True
+            ),
+            "val_loader": DataLoader(
+                val_dataset,
+                batch_size=self.batch_size_spin.value(),
+                shuffle=False
+            )
+        }
+
         # 获取训练参数
         train_params = {
             "learning_rate": self.lr_spin.value(),
@@ -445,7 +515,7 @@ class TrainingPage(QWidget):
         
         # 开始训练
         self.training_thread.start()
-    
+
     def stop_training(self):
         """停止训练"""
         if self.training_thread and self.training_thread.isRunning():
@@ -490,29 +560,10 @@ class TrainingPage(QWidget):
         ax2 = self.figure.add_subplot(212)
         ax2.plot(history["accuracy"], label="训练准确率")
         ax2.plot(history["val_accuracy"], label="验证准确率")
-        ax2.set_title("准���率曲线")
+        ax2.set_title("准确率曲线")
         ax2.set_xlabel("Epoch")
         ax2.set_ylabel("Accuracy (%)")
         ax2.legend()
         
         self.figure.tight_layout()
         self.canvas.draw() 
-    
-    def save_model(self):
-        """保存当前加载的模型"""
-        if self.model is None:
-            QMessageBox.warning(self, "警告", "没有加载模型，无法保存！")
-            return
-        
-        try:
-            # 选择保存路径
-            file_path, _ = QFileDialog.getSaveFileName(
-                self, "保存模型", "", "模型文件 (*.pt);;所有文件 (*)"
-            )
-            if file_path:
-                # 保存模型
-                torch.save(self.model.state_dict(), file_path)
-                QMessageBox.information(self, "成功", "模型保存成功！")
-        
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存模型失败: {str(e)}") 
